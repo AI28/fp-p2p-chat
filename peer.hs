@@ -5,13 +5,13 @@ import GHC.Word
 import Data.List.Split
 import Project.Utils
 import Control.Concurrent
+import Control.Concurrent.Async
 
 main :: IO ()
 main = do
-       putStrLn "Insert w if you are waiting for a peer to contact you or m [PORT NUMBER] to contact a peer yourself."
        command <- getLine
        processCommand command
-       main 
+       main
 
 processCommand::String->IO ()
 processCommand x  
@@ -26,26 +26,58 @@ processCommand x
                                port <- getLine
                                acceptConn (stringToPortNumber port, tupleToHostAddress (127, 0, 0, 1))
                   | x == "r" = do
-                               putStrLn "Please insert the tracker's port and ip address and the port that you will listen on."
+                               putStrLn "Please insert the tracker's port."
                                port <- getLine
+                               putStrLn "Please insert the tracker's ip address."
                                ip_address <- getLine
+                               putStrLn "Please insert the ip address on which you will listen on."
+                               my_ip_address <- getLine
+                               putStrLn "Please insert the port on which you are listening on."
                                my_port <- getLine
                                putStrLn "Please insert a username."
                                username <- getLine
-                               registerAsPeer username my_port (port, ip_address)
+                               registerAsPeer username my_port (my_ip_address) (stringToPortNumber port, tupleToHostAddress (listToHostTuple stringToWord8 (parseIp ip_address)))
+                  | x == "g" = do
+                               putStrLn "Insert the tracker's ip address"
+                               ip <- getLine
+                               putStrLn "Insert the tracker's port"
+                               port <- getLine
+                               getPeers (stringToPortNumber port, tupleToHostAddress (listToHostTuple stringToWord8 (parseIp ip)))
+                  | x == "nt" = do
+                               putStrLn "Insert the new tracker's ip address."
+                               ip_address <- getLine
+                               putStrLn "Insert the new tracker's port."
+                               tracker_port <- getLine
+                               appendFile "./trackers" ("\n"++ip_address++":"++tracker_port)
+                               putStrLn "Tracker succesfully registered."
+                  | x == "gt" = do
+                               contents <- readFile "./trackers"
+                               putStrLn contents
+                               putStrLn "Trackers list."
                   | x == "h" = do
-                               putStrLn "m \n PORT \n IPv4 = message a peer ; w = wait to be messaged by a peer ; r \n PORT \n IPv4 = register peer with tracker"
+                               putStrLn " m = message a peer \n w = wait to be messaged by a peer \n r = register peer with tracker \n g = get peers from tracker \n nt = insert a new tracker \n gt = get trackers list"
 
                   | otherwise = do
-                                putStrLn "error: please type w if you wish to wait for a peer to contact you or m [PORT_NUMBER] if you wish to message someone."
+                                putStrLn "error: unrecognised command. type h to see the commands list"
 
-registerAsPeer::String->String->(String, String)->IO()
-registerAsPeer username my_port (pn, ha) = do
+getPeers::(PortNumber, HostAddress)->IO()
+getPeers (pn, ha) = do
+                      sock <- socket AF_INET Stream 0
+                      setSocketOption sock KeepAlive 1
+                      connect sock $ SockAddrInet pn ha
+                      hdl <- socketToHandle sock ReadWriteMode
+                      hPutStrLn hdl "g:"
+                      result <- hGetLine hdl
+                      putStrLn result
+
+registerAsPeer::String->String->String->(PortNumber, HostAddress)->IO()
+registerAsPeer username my_port ip_address (pn, ha) = do
                                            sock <- socket AF_INET Stream 0
                                            setSocketOption sock KeepAlive 1
-                                           connect sock $ SockAddrInet (stringToPortNumber pn) (tupleToHostAddress (listToHostTuple stringToWord8 (parseIp ha)))
+                                           connect sock $ SockAddrInet pn ha
                                            hdl <- socketToHandle sock ReadWriteMode
-                                           hPutStrLn hdl (username++":"++my_port)
+                                           hPutStrLn hdl ("r:"++username++":"++ip_address++":"++my_port)
+
 acceptConn::(PortNumber, HostAddress)->IO ()
 acceptConn (pn, ha) = do
                   sock <- socket AF_INET Stream 0
@@ -53,43 +85,32 @@ acceptConn (pn, ha) = do
                   bind sock $ SockAddrInet pn 0
                   listen sock 1
                   conn <- accept sock
-                  runIncomingConn conn
+                  runConnection conn outgoingHandler
 
 connectToPeer::(PortNumber, HostAddress)->IO ()
 connectToPeer (pn, ha) = do
                          outgoing_sock <- socket AF_INET Stream 0
                          setSocketOption outgoing_sock KeepAlive 1
                          connect outgoing_sock $ SockAddrInet pn ha
-                         runOutgoingConn (outgoing_sock, (SockAddrInet pn ha))
+                         runConnection (outgoing_sock, (SockAddrInet pn ha)) (incomingHandler)
                        
-runOutgoingConn::(Socket, SockAddr) -> IO ()
-runOutgoingConn (sock, sock_addr) = do
-    socket_name <- getPeerName sock -- preluam adresa ip si portul sursa al ultimului pachet primit
-    putStrLn $ show socket_name
-    hdl <- socketToHandle sock ReadWriteMode
-    hSetBuffering hdl NoBuffering
-    outgoingHandler hdl
-
 outgoingHandler::Handle->IO()
 outgoingHandler hdl = do
                       text <- getLine
                       hPutStrLn hdl text
-                      text2 <- hGetLine hdl
-                      putStrLn ("Peer:"++text2)
                       outgoingHandler hdl
-
-runIncomingConn::(Socket, SockAddr)->IO()
-runIncomingConn (sock, sock_addr) = do
-                            socket_name <- getPeerName sock
-                            putStrLn $ show socket_name
-                            hdl <- socketToHandle sock ReadWriteMode
-                            hSetBuffering hdl NoBuffering
-                            incomingHandler hdl
 
 incomingHandler::Handle->IO()
 incomingHandler hdl = do
                       text <- hGetLine hdl
                       putStrLn ("Peer: " ++ text)
-                      text2 <- getLine
-                      hPutStrLn hdl text2
                       incomingHandler hdl
+
+runConnection::(Socket, SockAddr)->(Handle->IO())->IO()
+runConnection (sock, sock_addr) appropriate_handler = do
+                                                        socket_name <- getPeerName sock
+                                                        putStrLn $ show socket_name
+                                                        hdl <- socketToHandle sock ReadWriteMode
+                                                        hSetBuffering hdl NoBuffering
+                                                        async $ outgoingHandler hdl
+                                                        incomingHandler hdl

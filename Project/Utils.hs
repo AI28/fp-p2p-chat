@@ -1,4 +1,4 @@
-module Project.Utils(stringToWord8, stringToPortNumber, listToHostTuple, parseIp) where
+module Project.Utils(stringToWord8, stringToPortNumber, listToHostTuple, parseIp, concatenateStrings) where
 import GHC.Word
 import Network.Socket
 import Data.List.Split
@@ -14,3 +14,6 @@ listToHostTuple f [w, x, y, z] = (f w, f x, f y, f z)
 
 parseIp::String->[String]
 parseIp ip = splitOn "." ip
+
+concatenateStrings::String->String->String
+concatenateStrings s1 s2 = s1 ++ ":" ++ s2
